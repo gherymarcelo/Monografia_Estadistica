@@ -1,0 +1,139 @@
+Se descarga las imágenes satelitales usando Google Earth Engine, se adjunta los links y los códigos usados.
+
+https://code.earthengine.google.com/?scriptPath=users%2Fgherypaco%2Fprogramasig%3AORURO_SENTINEL
+
+// 1. Área de estudio (puedes cambiar esto por tu geometría)
+Map.centerObject(areaEstudio, 9);
+
+// 2. Filtro general para Sentinel-1 VV y VH (si existen) en el periodo seco
+var s1 = ee.ImageCollection('COPERNICUS/S1_GRD')
+  .filterBounds(areaEstudio)
+  .filterDate('2024-06-01', '2024-07-31')  // PERIODO SECO
+  .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VV'))
+  .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VH'))
+  .filter(ee.Filter.eq('instrumentMode', 'IW'))
+  .select(['VV', 'VH'])
+  .map(function(image) {
+    var edgeVV = image.select('VV').lt(-30.0);
+    var edgeVH = image.select('VH').lt(-35.0);
+    var edgeMask = edgeVV.or(edgeVH);  // Más conservador
+    var finalMask = image.mask().and(edgeMask.not());
+    return image.updateMask(finalMask);
+  });
+
+// 3. Separar por órbita y calcular promedio (VV + VH)
+var ascSeco = s1
+  .filter(ee.Filter.eq('orbitProperties_pass', 'ASCENDING'))
+  .mean()
+  .clip(areaEstudio);
+
+var descSeco = s1
+  .filter(ee.Filter.eq('orbitProperties_pass', 'DESCENDING'))
+  .mean()
+  .clip(areaEstudio);
+
+// 4. Visualizar en el mapa
+Map.addLayer(ascSeco.select('VV'), {min: -25, max: 5}, 'ASC VV 2024');
+Map.addLayer(ascSeco.select('VH'), {min: -30, max: 0}, 'ASC VH 2024');
+Map.addLayer(descSeco.select('VV'), {min: -25, max: 5}, 'DESC VV 2024');
+Map.addLayer(descSeco.select('VH'), {min: -30, max: 0}, 'DESC VH 2024');
+
+// 5. Exportar imagen ASC (VV + VH)
+Export.image.toDrive({
+  image: ascSeco,
+  description: 'S1_ASC_2024_Bolivia_Seco_VV_VH',
+  folder: 'GEE_exports',
+  fileNamePrefix: 'S1_2024_ASC_Bolivia_Seco_VV_VH',
+  region: areaEstudio,
+  scale: 10,
+  maxPixels: 1e13
+});
+
+// 6. Exportar imagen DESC (VV + VH)
+Export.image.toDrive({
+  image: descSeco,
+  description: 'S1_DESC_2024_Bolivia_Seco_VV_VH',
+  folder: 'GEE_exports',
+  fileNamePrefix: 'S1_2024_DESC_Bolivia_Seco_VV_VH',
+  region: areaEstudio,
+  scale: 10,
+  maxPixels: 1e13
+});
+
+https://code.earthengine.google.com/?scriptPath=users%2Fgherypaco%2Fprogramasig%3AORURO_SENTINEL2
+
+// 1. Centrar el mapa en tu área de estudio
+Map.centerObject(areaEstudio, 9);
+
+// 2. Cargar Sentinel-2 SR
+var s2 = ee.ImageCollection('COPERNICUS/S2_SR')
+  .filterBounds(areaEstudio)
+  .filterDate('2024-06-01', '2024-07-31')
+  .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 20))
+  .map(function(image) {
+    var scl = image.select('SCL');
+    var cloudMask = scl.neq(3).and(scl.neq(8)).and(scl.neq(9)).and(scl.neq(10));
+    return image.updateMask(cloudMask);
+  });
+
+// 3. Mediana y recorte
+var s2_median = s2.median().clip(areaEstudio);
+
+// 4. Calcular índices
+var ndvi = s2_median.normalizedDifference(['B8', 'B4']).rename('NDVI');
+var ndwi = s2_median.normalizedDifference(['B3', 'B8']).rename('NDWI');
+var ndbi = s2_median.normalizedDifference(['B11', 'B8']).rename('NDBI');
+
+// 5. Convertir todos los datos a float32
+s2_median = s2_median.select(['B2', 'B3', 'B4', 'B8', 'B11']).toFloat();
+ndvi = ndvi.toFloat();
+ndwi = ndwi.toFloat();
+ndbi = ndbi.toFloat();
+
+// 6. Combinar bandas e índices
+var indices = s2_median
+  .addBands(ndvi)
+  .addBands(ndwi)
+  .addBands(ndbi);
+
+// 7. Visualización
+Map.addLayer(ndvi, {min: 0, max: 1, palette: ['white', 'green']}, 'NDVI');
+Map.addLayer(ndwi, {min: -1, max: 1, palette: ['white', 'blue']}, 'NDWI');
+Map.addLayer(ndbi, {min: -1, max: 1, palette: ['white', 'brown']}, 'NDBI');
+
+// 8. Exportación (ya sin error)
+Export.image.toDrive({
+  image: indices,
+  description: 'S2_2024_Indices_Bolivia_Seco',
+  folder: 'GEE_exports',
+  fileNamePrefix: 'S2_2024_Bolivia_Seco',
+  region: areaEstudio,
+  scale: 10,
+  maxPixels: 1e13
+});
+
+https://code.earthengine.google.com/822de8138689447cf8c144f8efa5f1d0
+
+// Cargar WorldCover
+var worldcover = ee.Image("ESA/WorldCover/v100/2020").clip(zonaEstudio);
+
+// Visualizar
+Map.addLayer(worldcover, {
+  min: 10, max: 100,
+  palette: [
+    '006400', 'ffbb22', 'ffff4c', 'f096ff', 'fa0000', 'b4b4b4',
+    'f0f0f0', '0064c8', '0096a0', '00cf75', 'fae6a0'
+  ]
+}, 'WorldCover 2020');
+
+// Exportar etiquetas WorldCover
+Export.image.toDrive({
+  image: worldcover,
+  description: 'WorldCover_Export',
+  folder: 'GEE_exports',
+  fileNamePrefix: 'WorldCover_Export',
+  region: zonaEstudio.geometry(),
+  scale: 10,
+  crs: 'EPSG:4326',
+  maxPixels: 1e13
+});
